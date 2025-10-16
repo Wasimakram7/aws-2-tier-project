@@ -5,9 +5,7 @@ pipeline {
     AWS_DEFAULT_REGION = 'eu-north-1'
     AWS_ACCOUNT_ID     = '783764594284'
     IMAGE_TAG          = "1.0.${BUILD_NUMBER}"
-    // Adjust SCANNER_HOME to match your Jenkins 'Tool' name for Sonar Scanner
-    SCANNER_HOME       = tool 'sonar-scanner'
-    // ECR repo URIs - adjust repo names as needed
+    SCANNER_HOME       = tool 'sonar-scanner' // ensure this Tool exists in Jenkins configuration
     FRONTEND_ECR_URI   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/frontend"
     BACKEND_ECR_URI    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/backend"
   }
@@ -16,7 +14,6 @@ pipeline {
     // keep build logs for a bit
     buildDiscarder(logRotator(daysToKeepStr: '14', numToKeepStr: '50'))
     timestamps()
-    ansiColor('xterm')
   }
 
   stages {
@@ -28,15 +25,11 @@ pipeline {
     }
 
     stage('Unit Tests - Backend') {
-      agent {
-        label 'linux && docker' // adjust to an agent that can run tests
-      }
+      agent { label 'linux && docker' }
       steps {
         dir('backend') {
-          // Example: run your backend tests; adapt as needed
           sh '''
             echo "Running backend unit tests..."
-            # e.g. ./gradlew test or go test ./...
             if [ -f build.gradle ]; then
               ./gradlew clean test
             elif [ -f package.json ]; then
@@ -50,29 +43,20 @@ pipeline {
     }
 
     stage('Build & Push Frontend') {
-      /* Use a docker image with docker CLI so we can build and push images.
-         This mounts the host docker socket to allow building with host daemon.
-         If you prefer fully isolated DinD, switch to docker:dind and --privileged (extra config needed).
-      */
       agent {
         docker {
-          image 'docker:24.0.0' // choose appropriate docker CLI image
+          image 'docker:24.0.0'
           args  '-v /var/run/docker.sock:/var/run/docker.sock -v $HOME/.docker:/root/.docker'
         }
-      }
-      environment {
-        // ensure AWS CLI is available in container (install in image or add steps). Alternatively, perform ECR login on host.
       }
       steps {
         dir('frontend') {
           sh '''
             echo "Building frontend Docker image..."
             docker build -t frontend:${IMAGE_TAG} .
-            echo "Tagging for ECR..."
             docker tag frontend:${IMAGE_TAG} ${FRONTEND_ECR_URI}:${IMAGE_TAG}
-            echo "Logging into ECR..."
+            echo "ECR login..."
             aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
-            echo "Pushing frontend image..."
             docker push ${FRONTEND_ECR_URI}:${IMAGE_TAG}
           '''
         }
@@ -90,7 +74,6 @@ pipeline {
         dir('backend') {
           sh '''
             echo "Building backend..."
-            # build backend binary or docker image depending on repo
             if [ -f Dockerfile ]; then
               docker build -t backend:${IMAGE_TAG} .
               docker tag backend:${IMAGE_TAG} ${BACKEND_ECR_URI}:${IMAGE_TAG}
@@ -105,15 +88,12 @@ pipeline {
     }
 
     stage('Static Analysis / SonarQube') {
-      agent {
-        label 'linux'
-      }
+      agent { label 'linux' }
       steps {
         withEnv(["PATH+SONAR=${SCANNER_HOME}/bin:${env.PATH}"]) {
           dir('.') {
             sh '''
               echo "Running Sonar Scanner..."
-              # Example sonar-scanner invocation - adapt projectKey/name and server details
               sonar-scanner \
                 -Dsonar.projectKey=myproject \
                 -Dsonar.sources=. \
@@ -125,20 +105,17 @@ pipeline {
       }
     }
 
-    /*
-     * OWASP Dependency-Check Stage
-     * --------------------------------------------------
-     * You requested this stage to be commented out. If you want to re-enable it later,
-     * remove the surrounding comment markers (/* ... *\/) and provide the proper tool image or plugin setup.
-     *
-     * Example that is currently disabled:
-     *
-    stage('OWASP Dependency-Check') {
+    // OWASP Dependency-Check stage is present but disabled so parser won't choke and it's easy to re-enable.
+    stage('OWASP Dependency-Check (disabled)') {
+      when {
+        expression { return false } // change to 'return true' or remove this when-block to enable
+      }
       agent { label 'linux' }
       steps {
         dir('.') {
           sh '''
-            echo "Running OWASP Dependency-Check (currently disabled)..."
+            echo "OWASP Dependency-Check would run here (stage currently disabled)."
+            # Example:
             # dependency-check --project "myproject" --scan . --out reports/dependency-check-report.html
           '''
         }
@@ -149,31 +126,23 @@ pipeline {
         }
       }
     }
-    */
 
     stage('Notify / Deploy') {
       agent { label 'linux' }
       steps {
-        echo "Deployment step placeholder - implement your deployment (ECS, Kubernetes, etc.) here."
-        // Example: trigger Terraform, kubectl apply, ecs deploy, etc.
+        echo "Deployment placeholder - implement ECS/K8s/Terraform deploy here."
       }
     }
   }
 
   post {
-    success {
-      echo "Pipeline succeeded - ${env.BUILD_URL}"
-    }
-    unstable {
-      echo "Pipeline unstable - check warnings"
-    }
-    failure {
-      echo "Pipeline failed - ${env.BUILD_URL}"
-    }
+    success { echo "Pipeline succeeded - ${env.BUILD_URL}" }
+    unstable { echo "Pipeline unstable - check warnings" }
+    failure { echo "Pipeline failed - ${env.BUILD_URL}" }
     always {
-      // Optional: cleanup docker images on agent
+      // optional cleanup
       sh '''
-        echo "Cleaning up local docker images (if any)..."
+        echo "Cleanup (non-fatal)..."
         # docker image prune -f || true
       '''
     }
