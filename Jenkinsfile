@@ -2,7 +2,6 @@ pipeline {
   agent any
 
   environment {
-    // replace these or set them in Jenkins global env / credentials
     AWS_ACCOUNT_ID      = '783764594284'
     AWS_DEFAULT_REGION  = 'eu-north-1'
     IMAGE_TAG           = "1.0.${BUILD_NUMBER}"
@@ -10,10 +9,6 @@ pipeline {
     BACKEND_DIR         = 'backend'
     FRONTEND_ECR_URI    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/frontend"
     BACKEND_ECR_URI     = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/backend"
-
-    // Sonar values - set SONAR_HOST_URL and SONAR_TOKEN in Jenkins credentials or env
-    SONAR_HOST_URL      = "${SONAR_HOST_URL ?: 'http://sonarqube:9000'}"
-    SONAR_TOKEN         = "${SONAR_TOKEN ?: ''}"
   }
 
   options {
@@ -30,20 +25,19 @@ pipeline {
     }
 
     stage('SonarQube Scan') {
-      // use sonar-scanner docker image so you don't need to pre-install sonar-scanner on agent
       steps {
-        script {
-          // run sonar scanner via docker; mount workspace to /src inside container
+        // Use Jenkins Credentials (create a "Secret text" / string credential and set id below)
+        withCredentials([string(credentialsId: 'sonar-token-id', variable: 'SONAR_TOKEN')]) {
           sh """
-            echo "Running Sonar Scanner..."
+            echo "Running Sonar Scanner (containerized)..."
             docker run --rm \
-              -v "${env.WORKSPACE}:/src" \
-              -e SONAR_HOST_URL=${SONAR_HOST_URL} \
+              -v "${WORKSPACE}:/src" \
+              -e SONAR_HOST_URL=${SONAR_HOST_URL:-http://sonarqube:9000} \
               -e SONAR_TOKEN=${SONAR_TOKEN} \
               sonarsource/sonar-scanner-cli:latest \
               -Dsonar.projectKey=${JOB_NAME}-${BUILD_NUMBER} \
               -Dsonar.sources=/src \
-              -Dsonar.host.url=${SONAR_HOST_URL} \
+              -Dsonar.host.url=${SONAR_HOST_URL:-http://sonarqube:9000} \
               -Dsonar.login=${SONAR_TOKEN} \
               > ${WORKSPACE}/reports/sonar.txt 2>&1 || true
           """
@@ -53,14 +47,11 @@ pipeline {
 
     stage('Trivy Scan (filesystem)') {
       steps {
-        script {
-          // run trivy scanning the workspace; output to reports/trivy.txt
-          sh """
-            echo "Running Trivy filesystem scan..."
-            docker run --rm -v "${env.WORKSPACE}:/src" aquasec/trivy:latest fs --no-progress --exit-code 0 --ignore-unfixed /src \
-              > ${WORKSPACE}/reports/trivy.txt 2>&1 || true
-          """
-        }
+        sh """
+          echo "Running Trivy filesystem scan..."
+          docker run --rm -v "${WORKSPACE}:/src" aquasec/trivy:latest fs --no-progress --exit-code 0 --ignore-unfixed /src \
+            > ${WORKSPACE}/reports/trivy.txt 2>&1 || true
+        """
       }
     }
 
@@ -75,24 +66,19 @@ pipeline {
             echo "==== Trivy Scan (trivy.txt) ===="
             cat reports/trivy.txt || echo "(no trivy output)"
           } > reports/combined-report.txt
-          echo "Combined report stored at reports/combined-report.txt"
         '''
         archiveArtifacts artifacts: 'reports/combined-report.txt, reports/sonar.txt, reports/trivy.txt', allowEmptyArchive: false
       }
     }
 
     stage('Build & Push Docker Images to ECR') {
-      // This stage assumes docker and aws CLI are available on agent (or mounted)
       steps {
         script {
-          // login to ECR
           sh """
-            echo "Ensure ECR repo exists (create if needed)... (optional step skipped)"
             echo "Logging in to ECR..."
             aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
           """
 
-          // Build frontend (if directory exists)
           sh """
             if [ -d "${FRONTEND_DIR}" ]; then
               echo "Building frontend image..."
@@ -104,7 +90,6 @@ pipeline {
             fi
           """
 
-          // Build backend (if directory exists)
           sh """
             if [ -d "${BACKEND_DIR}" ]; then
               echo "Building backend image..."
@@ -128,7 +113,6 @@ pipeline {
       echo "Pipeline failed — check reports/combined-report.txt and console output."
     }
     always {
-      // Keep combined report available and print path
       sh 'echo "Reports: $(ls -1 reports || true)" || true'
     }
   }
