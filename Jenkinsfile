@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        AWS_DEFAULT_REGION = 'us-east-1'
-        AWS_ACCOUNT_ID     = '657001761946'
+        AWS_DEFAULT_REGION = 'eu-north-1'
+        AWS_ACCOUNT_ID     = '783764594284'
         IMAGE_TAG          = "1.0.${BUILD_NUMBER}"
         SCANNER_HOME       = tool 'sonar-scanner'
         FRONTEND_ECR_URI   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/frontend-repo"
@@ -22,7 +22,7 @@ pipeline {
             steps {
                 git branch: 'main',
                     credentialsId: 'github-cred',
-                    url: 'https://github.com/vijaygiduthuri/aws-2-tier-project.git'
+                    url: 'https://github.com/Wasimakram7/aws-2-tier-project.git'
             }
         }
 
@@ -132,49 +132,7 @@ pipeline {
             }
         }
 
-        stage('Clone Helm Chart for CD') {
-            steps {
-                git branch: 'main',
-                    credentialsId: 'github-cred',
-                    url: 'https://github.com/vijaygiduthuri/aws-2-tier-helm-chart.git'
-            }
-        }
-
-        stage('Update helm values.yaml with New Docker Image') {
-            environment {
-                GIT_REPO_NAME = "aws-2-tier-helm-chart"
-                GIT_USER_NAME = "vijaygiduthuri"
-            }
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'github-cred',
-                    usernameVariable: 'GIT_USERNAME',
-                    passwordVariable: 'GIT_PASSWORD'
-                )]) {
-                    sh """
-                        set -e
-
-                        git config user.email "vijaygiduthuri@example.com"
-                        git config user.name "${GIT_USER_NAME}"
-
-                        echo "=== BEFORE ==="
-                        cat helm-chart/values.yaml
-
-                        sed -i "s|image: 657001761946.dkr.ecr.us-east-1.amazonaws.com/frontend-repo:.*|image: 657001761946.dkr.ecr.us-east-1.amazonaws.com/frontend-repo:${IMAGE_TAG}|" helm-chart/values.yaml
-                        sed -i "s|image: 657001761946.dkr.ecr.us-east-1.amazonaws.com/backend-repo:.*|image: 657001761946.dkr.ecr.us-east-1.amazonaws.com/backend-repo:${IMAGE_TAG}|" helm-chart/values.yaml
-
-                        echo "=== AFTER ==="
-                        cat helm-chart/values.yaml
-
-                        if git diff --quiet; then
-                            echo "No changes to commit. Skipping commit."
-                        else
-                            git add helm-chart/values.yaml
-                            git commit -m "Updated helm values.yaml to version ${IMAGE_TAG}"
-                            git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git HEAD:main
-                        fi
-                    """
-                }
+       
             }
         }
     }
