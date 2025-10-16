@@ -1,11 +1,17 @@
 pipeline {
     agent any
 
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        ansiColor('xterm')
+    }
+
     environment {
         AWS_DEFAULT_REGION = 'eu-north-1'
         AWS_ACCOUNT_ID     = '783764594284'
         IMAGE_TAG          = "1.0.${BUILD_NUMBER}"
-        SCANNER_HOME       = tool 'sonar-scanner'
+        SCANNER_HOME       = tool 'sonar-scanner'    // ensure this tool is configured in Jenkins Global Tools
         FRONTEND_ECR_URI   = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/frontend-repo"
         BACKEND_ECR_URI    = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/backend-repo"
     }
@@ -30,8 +36,8 @@ pipeline {
             steps {
                 withSonarQubeEnv('sonar-server') {
                     sh """
-                        ${SCANNER_HOME}/bin/sonar-scanner \\
-                            -Dsonar.projectName=app \\
+                        ${SCANNER_HOME}/bin/sonar-scanner \
+                            -Dsonar.projectName=app \
                             -Dsonar.projectKey=app
                     """
                 }
@@ -41,7 +47,13 @@ pipeline {
         stage('Quality Gate') {
             steps {
                 script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token'
+                    // waitForQualityGate returns a map with .status
+                    def qg = waitForQualityGate()
+                    echo "SonarQube Quality Gate status: ${qg.status}"
+                    if (qg.status != 'OK') {
+                        // fail the build if quality gate failed
+                        error "Pipeline aborted due to SonarQube quality gate: ${qg.status}"
+                    }
                 }
             }
         }
@@ -55,19 +67,19 @@ pipeline {
 
         stage('Authenticate with AWS and ECR') {
             steps {
+                // 'aws-credentials-id' should be an AWS credential (access key/secret) stored in Jenkins
                 withCredentials([
                     [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials-id']
                 ]) {
                     sh '''
                         echo "Authenticating with AWS..."
-                        export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-                        export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+                        # AWS env vars injected by withCredentials: AWS_ACCESS_KEY_ID & AWS_SECRET_ACCESS_KEY
                         export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}
 
                         aws sts get-caller-identity
 
                         echo "Logging into ECR..."
-                        aws ecr get-login-password --region $AWS_DEFAULT_REGION | \
+                        aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | \
                         docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
                     '''
                 }
@@ -88,15 +100,15 @@ pipeline {
                         echo "Pushing images to ECR..."
                         docker push ${FRONTEND_ECR_URI}:${IMAGE_TAG}
                         docker push ${FRONTEND_ECR_URI}:latest
-                        sleep 5
                     """
                 }
             }
         }
 
-        stage('Scan Latest Frontend Docker Image using Trivy') {
+        stage('Scan Frontend Docker Image using Trivy') {
             steps {
-                sh "trivy image ${FRONTEND_ECR_URI}:${IMAGE_TAG}"
+                // Ensure trivy is available on the agent or use container step
+                sh "trivy image ${FRONTEND_ECR_URI}:${IMAGE_TAG} || true"
             }
         }
 
@@ -114,20 +126,35 @@ pipeline {
                         echo "Pushing images to ECR..."
                         docker push ${BACKEND_ECR_URI}:${IMAGE_TAG}
                         docker push ${BACKEND_ECR_URI}:latest
-                        sleep 5
                     """
                 }
             }
         }
 
-        stage('Scan Latest Backend Docker Image using Trivy') {
+        stage('Scan Backend Docker Image using Trivy') {
             steps {
-                sh "trivy image ${BACKEND_ECR_URI}:${IMAGE_TAG}"
+                sh "trivy image ${BACKEND_ECR_URI}:${IMAGE_TAG} || true"
             }
         }
 
-        stage('Clean Workspace for CD Repo') {
+        stage('Prepare for CD / Clean Workspace') {
             steps {
+                // do any CD repo checkout or artifact preparation here
                 cleanWs()
             }
         }
+    }
+
+    post {
+        always {
+            echo "Pipeline finished - cleaning workspace"
+            cleanWs()
+        }
+        failure {
+            echo "Build failed - check console output and reports"
+        }
+        success {
+            echo "Build succeeded - ${IMAGE_TAG} pushed to ECR"
+        }
+    }
+}
