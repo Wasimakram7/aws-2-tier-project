@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   environment {
-    AWS_ACCOUNT_ID      = '783764594284'
+    AWS_ACCOUNT_ID      = '78'
     AWS_DEFAULT_REGION  = 'eu-north-1'
     IMAGE_TAG           = "1.0.${BUILD_NUMBER}"
     FRONTEND_DIR        = 'frontend'
